@@ -1,0 +1,78 @@
+# kubectl -n moongcheap-develop apply -f k8s/cronjob.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: log-triage
+type: Opaque
+stringData:
+  # Grafana basic auth (Viewer 권한 계정 권장, admin 계정은 쓰지 마세요)
+  GRAFANA_USER: "triage-viewer"
+  GRAFANA_PASSWORD: "..."
+  DISCORD_WEBHOOK_URL: "https://discord.com/api/webhooks/xxx"
+  GITHUB_TOKEN: "github_pat_xxx" # 대상 레포 1개, Issues: Read/Write 만 허용한 fine-grained PAT
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: log-triage-state
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: log-triage
+spec:
+  schedule: "5 * * * *" # 매시 5분
+  timeZone: Asia/Seoul
+  concurrencyPolicy: Forbid # 이전 실행이 안 끝났으면 건너뜀 (SQLite 동시 접근 방지)
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 900
+      template:
+        spec:
+          restartPolicy: Never
+          securityContext:
+            fsGroup: 10001
+          containers:
+            - name: triage
+              image: <your-registry>/log-triage:0.1.0
+              envFrom:
+                - secretRef:
+                    name: log-triage
+              env:
+                - name: GRAFANA_URL # 클러스터 내부 주소(http://<svc>.<ns>.svc.cluster.local)로 바꿀 수도 있음
+                  value: "https://grafana.moongcheap.shop"
+                - name: GRAFANA_DS_UID
+                  value: "P8E80F9AEF21F6940"
+                - name: LOKI_NAMESPACE # ArgoCD 앱 moongcheap-backend-develop 의 배포 대상
+                  value: "moongcheap-develop"
+                - name: LOKI_APP # 같은 네임스페이스의 다른 앱(DB export 등) 로그 제외
+                  value: "backend"
+                # JSON 로깅 전환 후에는 라인 필터만 교체:
+                # - name: LOKI_LINE_FILTER
+                #   value: '| json | level=~"ERROR|WARN"'
+                - name: GITHUB_REPO
+                  value: "your-org/moongcheap-backend"
+                - name: AI_MODE # off | issue | analyze | fix  (단계적으로 올리세요)
+                  value: "issue"
+                - name: MAX_AI_DISPATCH_PER_DAY
+                  value: "5"
+                - name: STATE_DB
+                  value: "/data/triage.db"
+              volumeMounts:
+                - name: state
+                  mountPath: /data
+              resources:
+                requests: { cpu: 50m, memory: 64Mi }
+                limits: { memory: 256Mi }
+          volumes:
+            - name: state
+              persistentVolumeClaim:
+                claimName: log-triage-state

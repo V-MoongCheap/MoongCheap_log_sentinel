@@ -1,0 +1,49 @@
+# 백엔드 레포의 .github/workflows/pr-plumbing-test.yml 에 두세요.
+# ai-pr-test 라벨이 붙으면 Claude 호출 없이 Draft PR 을 열어
+# 승인 게이트 / TRIAGE_BOT_TOKEN 권한 / checkout·push·PR 생성 체인만 검증합니다.
+# 반드시 기본 브랜치(main)에 머지되어야 트리거됩니다 (labeled 이벤트는 기본 브랜치의 yaml만 읽음).
+name: PR plumbing test
+
+on:
+  issues:
+    types: [labeled]
+
+concurrency:
+  group: pr-plumbing-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    if: github.event.label.name == 'ai-pr-test'
+    environment: ai-fix
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    env:
+      GH_TOKEN: ${{ secrets.TRIAGE_BOT_TOKEN }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: develop
+          token: ${{ secrets.TRIAGE_BOT_TOKEN }}
+
+      - name: Open plumbing-test draft PR
+        run: |
+          set -euo pipefail
+          BR="pr-test/issue-${ISSUE_NUMBER}"
+          git config user.name  "triage-bot"
+          git config user.email "triage-bot@users.noreply.github.com"
+          git checkout -b "$BR"
+          printf '\n' >> README.md
+          git add README.md
+          git commit -m "test: PR plumbing verification for #${ISSUE_NUMBER}"
+          git push -u origin "$BR"
+          gh pr create --draft --base develop --head "$BR" \
+            --title "test: PR plumbing (#${ISSUE_NUMBER})" \
+            --body "Mechanics-only test. Close without merging. Fixes #${ISSUE_NUMBER}"
+          gh issue comment "$ISSUE_NUMBER" --body "✅ 배관 테스트 PR 생성 완료 — 머지하지 말고 닫아 주세요."

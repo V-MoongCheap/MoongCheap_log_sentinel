@@ -1,0 +1,15 @@
+data/
+*.db
+*.db-journal
+
+.env
+.env.local
+
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+.idea/
+.vscode/
